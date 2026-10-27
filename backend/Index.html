@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg:#f2f2f7; --card:#ffffff; --text:#1c1c1e; --muted:#8e8e93;
+    --line:#e5e5ea; --accent:#0a84ff; --up:#ff3b30; --down:#34c759;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#000000; --card:#1c1c1e; --text:#f2f2f7; --muted:#8e8e93; --line:#2c2c2e; }
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body {
+    margin:0 auto; max-width:560px; padding:16px 16px 48px;
+    background:var(--bg); color:var(--text);
+    font:16px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  }
+  .top { display:flex; align-items:center; justify-content:space-between; margin:4px 0 16px; }
+  .top h1 { font-size:22px; margin:0; font-weight:700; }
+  .nav { width:40px; height:40px; border-radius:20px; border:0; background:var(--card);
+         color:var(--accent); font-size:24px; line-height:1; cursor:pointer; }
+  .card { background:var(--card); border-radius:16px; padding:16px; margin-bottom:16px; }
+  .label { color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:.04em; }
+  .big { font-size:40px; font-weight:700; letter-spacing:-.02em; margin:4px 0; }
+  .muted { color:var(--muted); font-size:14px; }
+  .chip { display:inline-block; padding:2px 8px; border-radius:10px; font-size:13px; font-weight:600; }
+  .chip.up { background:rgba(255,59,48,.12); color:var(--up); }
+  .chip.down { background:rgba(52,199,89,.14); color:var(--down); }
+  h2 { font-size:17px; margin:0 0 12px; }
+  .sec { margin:24px 4px 8px; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; font-weight:600; }
+  .cat { margin-bottom:12px; }
+  .cat:last-child { margin-bottom:0; }
+  .row { display:flex; justify-content:space-between; gap:12px; font-size:15px; }
+  .bar { height:8px; border-radius:4px; background:var(--line); margin-top:6px; overflow:hidden; }
+  .bar i { display:block; height:100%; border-radius:4px; }
+  .day { margin-bottom:12px; padding:0; overflow:hidden; }
+  .dayhead { display:flex; justify-content:space-between; padding:10px 16px; font-size:13px;
+             color:var(--muted); border-bottom:1px solid var(--line); }
+  .tx { display:flex; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); align-items:flex-start; }
+  .tx:last-child { border-bottom:0; }
+  .dot { width:36px; height:36px; border-radius:18px; flex:none; display:flex; align-items:center;
+         justify-content:center; font-weight:700; color:#fff; font-size:15px; }
+  .txmain { flex:1; min-width:0; }
+  .txtop { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
+  .txsub { color:var(--muted); font-size:13px; margin-top:2px; overflow-wrap:anywhere; }
+  .txsub a { color:var(--accent); text-decoration:none; }
+  .empty { text-align:center; padding:32px 16px; color:var(--muted); }
+  .loading { text-align:center; padding:60px 0; color:var(--muted); }
+</style>
+</head>
+<body>
+  <header class="top">
+    <button class="nav" id="prev" aria-label="Previous month">‹</button>
+    <h1 id="month">Expenses</h1>
+    <button class="nav" id="next" aria-label="Next month">›</button>
+  </header>
+
+  <div id="app"><div class="loading">Loading…</div></div>
+
+<script>
+  const COLORS = ['#0a84ff','#ff9f0a','#30d158','#ff375f','#bf5af2','#64d2ff','#ffd60a','#ac8e68','#5e5ce6','#ff6961'];
+  let CUR = 'USD', all = [], view = new Date(); view.setDate(1);
+  const colorMap = {};
+
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const money = n => { try { return new Intl.NumberFormat(undefined,{style:'currency',currency:CUR}).format(n); }
+                       catch(e) { return n.toFixed(2) + ' ' + CUR; } };
+  const colorFor = c => colorMap[c] || (colorMap[c] = COLORS[Object.keys(colorMap).length % COLORS.length]);
+  const sameMonth = (d, y, m) => d.getFullYear() === y && d.getMonth() === m;
+
+  function fail(msg) {
+    document.getElementById('app').innerHTML = '<div class="card empty">' + esc(msg) + '</div>';
+  }
+
+  function render() {
+    const y = view.getFullYear(), m = view.getMonth();
+    document.getElementById('month').textContent =
+      view.toLocaleDateString(undefined, { month:'long', year:'numeric' });
+
+    const rows = all.filter(r => sameMonth(r.d, y, m)).sort((a,b) => b.d - a.d);
+    const prev = new Date(y, m - 1, 1);
+    const prevTotal = all.filter(r => sameMonth(r.d, prev.getFullYear(), prev.getMonth()))
+                         .reduce((s,r) => s + r.amount, 0);
+    const total = rows.reduce((s,r) => s + r.amount, 0);
+
+    const now = new Date();
+    const daysElapsed = sameMonth(now, y, m) ? now.getDate() : new Date(y, m + 1, 0).getDate();
+    const avg = rows.length ? total / daysElapsed : 0;
+
+    let change = '';
+    if (prevTotal > 0) {
+      const pct = Math.round((total - prevTotal) / prevTotal * 100);
+      change = '<span class="chip ' + (pct > 0 ? 'up' : 'down') + '">' +
+               (pct > 0 ? '▲ ' : '▼ ') + Math.abs(pct) + '% vs last month</span>';
+    }
+
+    // Categories
+    const by = {};
+    rows.forEach(r => by[r.category] = (by[r.category] || 0) + r.amount);
+    const cats = Object.entries(by).sort((a,b) => b[1] - a[1]);
+    const catHtml = cats.length ? cats.map(([c,v]) =>
+      '<div class="cat"><div class="row"><span>' + esc(c) + '</span><span>' + money(v) +
+      ' <span class="muted">' + Math.round(v / total * 100) + '%</span></span></div>' +
+      '<div class="bar"><i style="width:' + (v / cats[0][1] * 100).toFixed(1) + '%;background:' + colorFor(c) + '"></i></div></div>'
+    ).join('') : '<div class="muted">Nothing recorded this month.</div>';
+
+    // Transactions grouped by day
+    const days = {};
+    rows.forEach(r => { const k = r.d.toDateString(); (days[k] = days[k] || []).push(r); });
+    const listHtml = Object.keys(days).length ? Object.entries(days).map(([k, items]) => {
+      const dayTotal = items.reduce((s,r) => s + r.amount, 0);
+      const label = new Date(k).toLocaleDateString(undefined, { weekday:'short', day:'numeric', month:'short' });
+      return '<div class="card day"><div class="dayhead"><span>' + label + '</span><span>' + money(dayTotal) + '</span></div>' +
+        items.map(r => {
+          const time = r.d.toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' });
+          const place = r.address ? esc(r.address) : (r.lat !== null ? 'Location saved' : '');
+          const map = r.lat !== null ? ' · <a href="https://maps.apple.com/?ll=' + r.lat + ',' + r.lng + '&q=Expense">Map</a>' : '';
+          return '<div class="tx"><div class="dot" style="background:' + colorFor(r.category) + '">' +
+            esc(r.category.charAt(0).toUpperCase()) + '</div><div class="txmain">' +
+            '<div class="txtop"><span>' + esc(r.category) + '</span><span>' + money(r.amount) + '</span></div>' +
+            (r.remarks ? '<div class="txsub">' + esc(r.remarks) + '</div>' : '') +
+            '<div class="txsub">' + time + (place ? ' · ' + place : '') + map + '</div></div></div>';
+        }).join('') + '</div>';
+    }).join('') : '<div class="card empty">No expenses this month.<br>Run your Shortcut to add one.</div>';
+
+    document.getElementById('app').innerHTML =
+      '<section class="card"><div class="label">Spent this month</div>' +
+      '<div class="big">' + money(total) + '</div>' +
+      '<div class="muted">' + rows.length + ' expense' + (rows.length === 1 ? '' : 's') +
+      ' · ' + money(avg) + '/day avg</div>' + (change ? '<div style="margin-top:8px">' + change + '</div>' : '') +
+      '</section>' +
+      '<section class="card"><h2>By category</h2>' + catHtml + '</section>' +
+      '<div class="sec">Transactions</div>' + listHtml;
+  }
+
+  document.getElementById('prev').onclick = () => { view = new Date(view.getFullYear(), view.getMonth() - 1, 1); render(); };
+  document.getElementById('next').onclick = () => { view = new Date(view.getFullYear(), view.getMonth() + 1, 1); render(); };
+
+  google.script.url.getLocation(loc => {
+    const key = loc.parameter.key || '';
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res || !res.ok) return fail(res ? res.error : 'Could not load data.');
+        CUR = res.currency || 'USD';
+        all = res.rows.map(r => Object.assign(r, { d: new Date(r.ts) }));
+        render();
+      })
+      .withFailureHandler(err => fail('Error: ' + err.message))
+      .getData(key);
+  });
+</script>
+</body>
+</html>
