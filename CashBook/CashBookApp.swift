@@ -11,6 +11,19 @@ final class AppRouter {
     static let shared = AppRouter()
     var tab: AppTab = .home
     var showAdd = false
+
+    init() {
+        // Launch options used for preview screenshots: -tab history|settings, -add
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "-tab"), i + 1 < args.count {
+            switch args[i + 1] {
+            case "history": tab = .history
+            case "settings": tab = .settings
+            default: break
+            }
+        }
+        showAdd = args.contains("-add")
+    }
 }
 
 @main

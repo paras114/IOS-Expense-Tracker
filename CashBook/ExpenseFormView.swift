@@ -31,6 +31,10 @@ struct ExpenseFormView: View {
             _lng = State(initialValue: e.lng)
             _address = State(initialValue: e.address)
             _locState = State(initialValue: (e.hasLocation || !e.address.isEmpty) ? .found : .idle)
+        } else if DemoData.isOn {
+            _amountText = State(initialValue: "180")
+            _category = State(initialValue: "Food")
+            _remarks = State(initialValue: "Chai and samosa with team")
         }
     }
 

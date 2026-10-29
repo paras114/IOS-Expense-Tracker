@@ -26,7 +26,17 @@ final class Store {
         return dir.appendingPathComponent("expenses.json")
     }
 
+    let isDemo = DemoData.isOn
+
     init() {
+        if isDemo {
+            settings.currency = "INR"
+            settings.serverURL = "https://script.google.com/macros/s/AKfycb…/exec"
+            settings.secret = "demo"
+            expenses = DemoData.make()
+            lastSynced = Date().addingTimeInterval(-120)
+            return
+        }
         if let data = UserDefaults.standard.data(forKey: "settings"),
            let s = try? JSONDecoder().decode(AppSettings.self, from: data) {
             settings = s
@@ -42,6 +52,7 @@ final class Store {
     // MARK: Saving on the phone
 
     func persist() {
+        if isDemo { return }
         let saved = Saved(expenses: expenses, pending: pending, lastSynced: lastSynced)
         if let data = try? JSONEncoder().encode(saved) {
             try? data.write(to: Self.fileURL, options: .atomic)
@@ -49,6 +60,7 @@ final class Store {
     }
 
     func saveSettings() {
+        if isDemo { return }
         if let data = try? JSONEncoder().encode(settings) {
             UserDefaults.standard.set(data, forKey: "settings")
         }
@@ -95,6 +107,7 @@ final class Store {
     }
 
     func sync() async {
+        if isDemo { return }
         guard let api else { return }
         if isSyncing { syncAgain = true; return }
         isSyncing = true

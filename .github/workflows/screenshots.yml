@@ -1,0 +1,76 @@
+name: Preview screenshots
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  screenshots:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Pick and boot an iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devs = [d for rt, ds in json.load(sys.stdin)["devices"].items() if "iOS" in rt for d in ds]
+          pref = ["iPhone 16 Pro", "iPhone 16", "iPhone 15 Pro"]
+          pick = next((d for p in pref for d in devs if d["name"] == p), None) or next(d for d in devs if d["name"].startswith("iPhone"))
+          print(pick["udid"])')
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+
+      - name: Build for simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project CashBook.xcodeproj -target CashBook -configuration Release \
+            -sdk iphonesimulator ONLY_ACTIVE_ARCH=YES ARCHS=arm64 build 2>&1 | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/Release-iphonesimulator/CashBook.app
+
+      - name: Take screenshots
+        run: |
+          APP=com.paras.cashbook
+          xcrun simctl install "$UDID" build/Release-iphonesimulator/CashBook.app
+          xcrun simctl privacy "$UDID" grant location "$APP" || true
+          xcrun simctl location "$UDID" set 28.6315,77.2167 || true
+          xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3 || true
+          mkdir -p shots
+
+          shot () { # name, appearance, launch args...
+            name=$1; look=$2; shift 2
+            xcrun simctl ui "$UDID" appearance "$look"
+            xcrun simctl terminate "$UDID" "$APP" 2>/dev/null || true
+            xcrun simctl launch "$UDID" "$APP" -demo "$@"
+            sleep 6
+            xcrun simctl io "$UDID" screenshot "shots/$name.png"
+          }
+
+          shot 1-overview light
+          shot 2-add-expense light -add
+          shot 3-history light -tab history
+          shot 4-settings light -tab settings
+          shot 5-overview-dark dark
+          shot 6-add-expense-dark dark -add
+          ls -l shots
+
+      - name: Publish to the screenshots branch
+        run: |
+          cd shots
+          git init -q -b screenshots
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add .
+          git commit -qm "Screenshots for ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" screenshots
