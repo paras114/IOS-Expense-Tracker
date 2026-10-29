@@ -1,18 +1,20 @@
 /**
- * Cash Expense Tracker — Google Apps Script backend
- * - iPhone Shortcut and the Cash Book app send expenses here (doPost)
- * - The Cash Book app reads them back (doGet ?format=json)
- * - Also serves the web dashboard (doGet)
+ * Cash Book — Google Apps Script backend
+ * - The iPhone Shortcut and the Cash Book app send entries here (doPost)
+ * - The app reads everything back (doGet ?format=json) and checks for changes (?format=version)
+ * - Also serves the old web dashboard (doGet with no format)
  */
 
 // ===== EDIT THESE =====
 const SECRET = 'change-me-to-a-long-random-phrase'; // same value goes in the Shortcut, the app and the dashboard link
-const CURRENCY = 'USD';                              // e.g. USD, EUR, GBP, INR, PKR, AED
+const CURRENCY = 'INR';                              // e.g. INR, USD, EUR, GBP, AED
 const SHEET_NAME = 'Expenses';
 // ======================
 
-const HEADERS = ['Timestamp', 'Amount', 'Category', 'Remarks', 'Address', 'Latitude', 'Longitude', 'Map', 'ID'];
+const HEADERS = ['Timestamp', 'Amount', 'Category', 'Remarks', 'Address', 'Latitude', 'Longitude', 'Map', 'ID', 'Type'];
 const ID_COL = 9;
+const TYPE_COL = 10;   // "Spent" (default) or "Added" (cash added to the wallet)
+const PROPS = PropertiesService.getScriptProperties();
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -21,17 +23,17 @@ function getSheet_() {
     sh = ss.insertSheet(SHEET_NAME);
     sh.appendRow(HEADERS);
     sh.setFrozenRows(1);
-    sh.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold');
     sh.getRange('A:A').setNumberFormat('yyyy-mm-dd hh:mm');
     sh.getRange('B:B').setNumberFormat('#,##0.00');
   }
-  if (sh.getRange(1, ID_COL).getValue() !== 'ID') {
-    sh.getRange(1, ID_COL).setValue('ID').setFontWeight('bold');
-  }
+  // Older sheets: add the newer header cells if missing
+  if (sh.getRange(1, ID_COL).getValue() !== 'ID') sh.getRange(1, ID_COL).setValue('ID');
+  if (sh.getRange(1, TYPE_COL).getValue() !== 'Type') sh.getRange(1, TYPE_COL).setValue('Type');
+  sh.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold');
   return sh;
 }
 
-/** Gives every row an ID (older rows added before the app existed won't have one). */
+/** Gives every row an ID (rows added before the app existed won't have one). */
 function ensureIds_(sh) {
   const n = sh.getLastRow() - 1;
   if (n < 1) return;
@@ -56,8 +58,7 @@ function findRow_(sh, id) {
 }
 
 function json_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
 function toNum_(v) {
@@ -72,7 +73,25 @@ function toNum_(v) {
   return isFinite(n) ? n : null;
 }
 
-/** Called by the Shortcut and the app. action = add (default) | update | delete */
+function isAdded_(v) {
+  const t = String(v || '').trim().toLowerCase();
+  return t === 'in' || t === 'added' || t === 'cash in' || t === 'income';
+}
+
+/** Lets the app notice changes cheaply (live updates). */
+function bumpVersion_() { PROPS.setProperty('version', String(Date.now())); }
+function version_() { return PROPS.getProperty('version') || '0'; }
+
+function settings_() {
+  const p = PROPS.getProperties();
+  return {
+    budget: p.budget ? Number(p.budget) : 0,
+    opening: p.opening !== undefined && p.opening !== '' ? Number(p.opening) : null,
+    openingTs: p.openingTs ? Number(p.openingTs) : null
+  };
+}
+
+/** Called by the Shortcut and the app. action = add (default) | update | delete | settings */
 function doPost(e) {
   const lock = LockService.getScriptLock();
   try {
@@ -83,13 +102,25 @@ function doPost(e) {
     Object.keys(raw).forEach(k => d[String(k).trim().toLowerCase()] = raw[k]);
     if (String(d.key || '').trim() !== SECRET) return json_({ ok: false, error: 'Unauthorized' });
 
-    const sh = getSheet_();
     const action = String(d.action || 'add').trim().toLowerCase();
+
+    if (action === 'settings') {
+      if (d.budget !== undefined) PROPS.setProperty('budget', String(toNum_(d.budget) || 0));
+      if (d.opening !== undefined) {
+        PROPS.setProperty('opening', d.opening === null ? '' : String(toNum_(d.opening) || 0));
+        PROPS.setProperty('openingTs', String(Number(d.openingts) || Date.now())); // field names were lower-cased above
+      }
+      bumpVersion_();
+      return json_({ ok: true, settings: settings_() });
+    }
+
+    const sh = getSheet_();
     const id = String(d.id || '').trim();
 
     if (action === 'delete') {
       const r = findRow_(sh, id);
       if (r > 0) sh.deleteRow(r);
+      bumpVersion_();
       return json_({ ok: true, deleted: r > 0 });
     }
 
@@ -113,32 +144,32 @@ function doPost(e) {
       } catch (err) { /* keep going without an address */ }
     }
 
-    const mapLink = (lat !== null && lng !== null)
-      ? 'https://maps.apple.com/?ll=' + lat + ',' + lng + '&q=Expense'
-      : '';
-
+    const added = isAdded_(d.type);
+    const mapLink = (lat !== null && lng !== null) ? 'https://maps.apple.com/?ll=' + lat + ',' + lng + '&q=Expense' : '';
     const rowId = id || Utilities.getUuid();
     const row = [
       ts,
       amount,
-      String(d.category || 'Other').trim(),
+      added ? 'Cash in' : String(d.category || 'Other').trim(),
       String(d.remarks || '').trim(),
       address,
       lat === null ? '' : lat,
       lng === null ? '' : lng,
       mapLink,
-      rowId
+      rowId,
+      added ? 'Added' : 'Spent'
     ];
 
     const existing = findRow_(sh, id);
     if (existing > 0) {
-      // update, or a repeat of an add that already arrived (app retried after a dropped connection)
-      if (action === 'update') sh.getRange(existing, 1, 1, row.length).setValues([row]);
-      return json_({ ok: true, id: rowId, updated: action === 'update' });
+      // an update, or a repeat of an add that already arrived (the app retried after a dropped connection)
+      if (action === 'update') { sh.getRange(existing, 1, 1, row.length).setValues([row]); bumpVersion_(); }
+      return json_({ ok: true, id: rowId, address: address, updated: action === 'update' });
     }
 
     sh.appendRow(row);
-    return json_({ ok: true, id: rowId, amount: amount, category: row[2] });
+    bumpVersion_();
+    return json_({ ok: true, id: rowId, address: address, amount: amount, category: row[2] });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
@@ -146,25 +177,29 @@ function doPost(e) {
   }
 }
 
-/** ?format=json&key=… → data for the app. Otherwise → web dashboard. */
+/** ?format=json&key=… → everything for the app. ?format=version&key=… → change marker. Otherwise → old dashboard. */
 function doGet(e) {
   const p = (e && e.parameter) || {};
   if (p.format === 'json') return json_(getData(p.key || ''));
+  if (p.format === 'version') {
+    if (String(p.key || '').trim() !== SECRET) return json_({ ok: false, error: 'Unauthorized' });
+    return json_({ ok: true, version: version_() });
+  }
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('Expenses')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
-    .addMetaTag('apple-mobile-web-app-capable', 'yes');
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
 }
 
-/** Used by the app and the web dashboard */
+/** Used by the app and the old web dashboard */
 function getData(key) {
   if (String(key).trim() !== SECRET) return { ok: false, error: 'Invalid or missing key in the link.' };
   const sh = getSheet_();
   ensureIds_(sh);
   const n = sh.getLastRow() - 1;
-  if (n < 1) return { ok: true, currency: CURRENCY, rows: [] };
+  const base = { ok: true, currency: CURRENCY, settings: settings_(), version: version_() };
+  if (n < 1) return Object.assign(base, { rows: [] });
 
-  const values = sh.getRange(2, 1, n, ID_COL).getValues();
+  const values = sh.getRange(2, 1, n, TYPE_COL).getValues();
   const rows = values
     .filter(r => r[0] !== '' && r[1] !== '' && !isNaN(new Date(r[0]).getTime()))
     .map(r => ({
@@ -175,7 +210,8 @@ function getData(key) {
       remarks: String(r[3] || ''),
       address: String(r[4] || ''),
       lat: r[5] === '' ? null : Number(r[5]),
-      lng: r[6] === '' ? null : Number(r[6])
+      lng: r[6] === '' ? null : Number(r[6]),
+      type: isAdded_(r[TYPE_COL - 1]) ? 'in' : 'out'
     }));
-  return { ok: true, currency: CURRENCY, rows: rows };
+  return Object.assign(base, { rows: rows });
 }

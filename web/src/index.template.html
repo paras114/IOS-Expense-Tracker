@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cash Book</title>
+<meta name="description" content="Log cash, see what's left in your wallet and track your monthly budget. Syncs with your Google Sheet.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Cash Book">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f3f4f1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1110" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preload" href="geist.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face { font-family: "Geist"; src: url("geist.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+/* Clean ground, one ink colour, big numbers. The one decorative element is the "cash in hand" card, printed like a banknote. */
+:root {
+  --bg: #f3f4f1; --surface: #ffffff; --ink: #16181b; --muted: #6c716a; --line: #e2e4df; --fill: #eceee9;
+  --note: #d9e2cc; --note-ink: #33402a; --note-line: rgba(51, 64, 42, .16); --note-btn: rgba(255, 255, 255, .55);
+  --go: #1d7a4b; --go-soft: #dcefe3; --warn: #b8471a; --warn-soft: #f6e3d8;
+  --glass: rgba(255, 255, 255, .62); --glass-edge: rgba(255, 255, 255, .9);
+  --shadow: 0 10px 30px rgba(22, 24, 27, .10), 0 1px 3px rgba(22, 24, 27, .08);
+  --f: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1110; --surface: #1a1d1b; --ink: #eef0ec; --muted: #9aa197; --line: #2a2e2b; --fill: #232724;
+    --note: #2b3424; --note-ink: #dfe8d2; --note-line: rgba(223, 232, 210, .09); --note-btn: rgba(255, 255, 255, .08);
+    --go: #4fc387; --go-soft: rgba(79, 195, 135, .16); --warn: #ff8a5b; --warn-soft: rgba(255, 138, 91, .16);
+    --glass: rgba(34, 38, 35, .55); --glass-edge: rgba(255, 255, 255, .14); --shadow: 0 10px 30px rgba(0, 0, 0, .45); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1110; --surface: #1a1d1b; --ink: #eef0ec; --muted: #9aa197; --line: #2a2e2b; --fill: #232724;
+  --note: #2b3424; --note-ink: #dfe8d2; --note-line: rgba(223, 232, 210, .09); --note-btn: rgba(255, 255, 255, .08);
+  --go: #4fc387; --go-soft: rgba(79, 195, 135, .16); --warn: #ff8a5b; --warn-soft: rgba(255, 138, 91, .16);
+  --glass: rgba(34, 38, 35, .55); --glass-edge: rgba(255, 255, 255, .14); --shadow: 0 10px 30px rgba(0, 0, 0, .45); color-scheme: dark;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); }
+body { font: 16px/1.4 var(--f); -webkit-font-smoothing: antialiased; overflow: hidden; touch-action: manipulation; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input, select, textarea { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--go); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+svg { flex: none; }
+
+.app { position: fixed; inset: 0; max-width: 560px; margin: 0 auto; overflow: hidden; background: var(--bg); isolation: isolate; }
+.scroll { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; scrollbar-width: none;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) max(18px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 128px) max(18px, env(safe-area-inset-left, 0px)); }
+.scroll::-webkit-scrollbar { display: none; }
+
+/*PROTO_CSS*/
+
+.banner { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: var(--surface); border-radius: 18px; padding: 14px; margin-bottom: 12px; box-shadow: inset 0 0 0 1px var(--line); }
+.banner .ic { background: var(--go-soft); color: var(--go); }
+.banner b { display: block; font-size: 15px; }
+.banner span.s { font-size: 13px; color: var(--muted); }
+.cta { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; }
+.cta .g { flex: 1; min-width: 0; }
+.cta b { display: block; font-size: 15px; }
+.cta small { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; }
+.note.empty .amt { font-size: 28px; letter-spacing: -.02em; margin: 8px 0 4px; }
+.status-line { font-size: 12.5px; color: var(--muted); margin: 7px 6px 0; line-height: 1.4; }
+.status-line.err { color: var(--warn); }
+.sr textarea, .sr input.txt { border: 0; outline: none; background: none; width: 100%; font-size: 16px; resize: none; padding: 0; }
+.sr textarea { font: 14px/1.35 ui-monospace, Menlo, monospace; }
+.sr select { border: 0; outline: none; background: none; font-size: 15px; color: var(--muted); text-align: right; -webkit-appearance: none; appearance: none; max-width: 60%; }
+.sr .stack { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.sr .stack label { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.pend-dot { width: 7px; height: 7px; border-radius: 50%; background: #e0a100; display: inline-block; margin-left: 6px; vertical-align: 2px; }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+<script>
+'use strict';
+(function () {
+  // ---------- Icons (Lucide, bundled so the app works offline) ----------
+  const ICONS = /*ICONS*/;
+  function ic(name, size, sw) {
+    const s = size || 20, kids = ICONS[name] || [];
+    const a = o => Object.entries(o).map(([k, v]) => `${k}="${v}"`).join(' ');
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw || 2}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${kids.map(([t, x]) => `<${t} ${a(x)}/>`).join('')}</svg>`;
+  }
+
+  // ---------- Categories ----------
+  const CATS = [
+    { name: 'Food', icon: 'utensils', color: '#e2802c' }, { name: 'Groceries', icon: 'shopping-basket', color: '#2c9a57' },
+    { name: 'Transport', icon: 'car-taxi-front', color: '#2f74d0' }, { name: 'Shopping', icon: 'shopping-bag', color: '#d6457a' },
+    { name: 'Bills', icon: 'receipt', color: '#8a52cf' }, { name: 'Health', icon: 'pill', color: '#d64545' },
+    { name: 'Fun', icon: 'clapperboard', color: '#5a58cc' }, { name: 'Other', icon: 'package', color: '#7f857b' }
+  ];
+  const CASH_IN = { name: 'Cash in', icon: 'banknote', color: '#1d7a4b' };
+  const PALETTE = ['#e2802c', '#2c9a57', '#2f74d0', '#d6457a', '#8a52cf', '#d64545', '#5a58cc', '#7f857b', '#1f8a8a', '#a8742a'];
+  function catOf(e) {
+    if (e.type === 'in') return CASH_IN;
+    const n = String(e.category || 'Other');
+    const found = CATS.find(c => c.name.toLowerCase() === n.toLowerCase());
+    if (found) return found;
+    const s = [...n].reduce((a, ch) => a + ch.codePointAt(0), 0);
+    return { name: n, icon: 'tag', color: PALETTE[s % PALETTE.length] };
+  }
+  const icBox = (c, size, filled) => `<span class="ic" style="width:${size}px;height:${size}px;border-radius:${Math.round(size * .32)}px;background:${filled ? c.color : `color-mix(in srgb, ${c.color} 15%, transparent)`};color:${filled ? '#fff' : c.color}">${ic(c.icon, Math.round(size * .48), 2.1)}</span>`;
+
+  // ---------- Saved on this phone ----------
+  const DEMO = new URLSearchParams(location.search).has('demo');
+  const db = {
+    get(k, d) { if (DEMO) return d; try { const v = localStorage.getItem('cb2.' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set(k, v) { if (DEMO) return; try { localStorage.setItem('cb2.' + k, JSON.stringify(v)); } catch (e) {} }
+  };
+  function oldGet(k) { try { const v = localStorage.getItem('cb.' + k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+
+  const S = {
+    cfg: Object.assign({ url: '', secret: '', currency: 'INR', live: false, theme: 'system' }, db.get('cfg', {})),
+    items: db.get('items', []),
+    pending: db.get('pending', []),
+    srv: Object.assign({ budget: 0, opening: null, openingTs: null }, db.get('srv', {})),
+    version: db.get('version', null),
+    lastSynced: db.get('lastSynced', null),
+    syncError: null, busy: false, again: false, loadedOnce: db.get('items', null) !== null,
+    tab: 'home', fresh: new Set(), sheet: null, form: null,
+    hist: { q: '', range: 'month', from: '', to: '', cats: [], type: 'all', sort: 'new' }
+  };
+
+  // Bring over settings and unsent entries from the previous version of the app
+  if (!DEMO && !db.get('migrated', false)) {
+    const old = oldGet('settings');
+    if (old) { S.cfg.url = old.url || ''; S.cfg.secret = old.secret || ''; if (old.currency) S.cfg.currency = old.currency; }
+    const oldPending = oldGet('pending') || [];
+    oldPending.forEach(op => {
+      if (op.type === 'delete') S.pending.push({ op: 'delete', id: op.id });
+      else if (op.expense) S.pending.push({ op: op.type, item: fromOld(op.expense) });
+    });
+    const oldItems = oldGet('expenses');
+    if (oldItems && !S.items.length) S.items = oldItems.map(fromOld);
+    db.set('migrated', true); saveAll();
+  }
+  function fromOld(e) { return { id: e.id, ts: new Date(e.ts).getTime(), amount: Number(e.amount) || 0, category: e.category || 'Other', note: e.remarks || '', place: e.address || '', lat: e.lat == null ? null : e.lat, lng: e.lng == null ? null : e.lng, type: 'out' }; }
+
+  function saveAll() {
+    db.set('cfg', S.cfg); db.set('items', S.items); db.set('pending', S.pending);
+    db.set('srv', S.srv); db.set('version', S.version); db.set('lastSynced', S.lastSynced);
+  }
+  const configured = () => DEMO || (/^https:\/\//.test(S.cfg.url.trim()) && S.cfg.secret.trim() !== '');
+
+  // ---------- Formatting ----------
+  const DAY = 864e5;
+  function fmt(n, d) {
+    try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: S.cfg.currency, minimumFractionDigits: 0, maximumFractionDigits: d === undefined ? 2 : d }).format(n); }
+    catch (e) { return (d === 0 ? Math.round(n) : n) + ' ' + S.cfg.currency; }
+  }
+  function sym() { try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: S.cfg.currency }).formatToParts(0).find(p => p.type === 'currency').value; } catch (e) { return S.cfg.currency; } }
+  function short(n) {
+    if (S.cfg.currency !== 'INR') { try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: S.cfg.currency, notation: 'compact', maximumFractionDigits: 1 }).format(n); } catch (e) { return fmt(n, 0); } }
+    return n >= 100000 ? '₹' + (n / 100000).toFixed(1).replace('.0', '') + 'L' : n >= 10000 ? '₹' + (n / 1000).toFixed(1).replace('.0', '') + 'k' : fmt(n, 0);
+  }
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const sod = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const time = t => new Date(t).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+  const dstr = (t, o) => new Date(t).toLocaleDateString('en-IN', o);
+  const iso = t => { const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const isoLocal = t => iso(t) + 'T' + String(new Date(t).getHours()).padStart(2, '0') + ':' + String(new Date(t).getMinutes()).padStart(2, '0');
+  function dayName(t) { const s = sod(t), td = sod(Date.now()); if (s === td) return 'Today'; if (s === td - DAY) return 'Yesterday'; return dstr(t, { weekday: 'long', day: 'numeric', month: 'short' }); }
+  const outs = (from, to) => S.items.filter(e => e.type !== 'in' && e.ts >= from && e.ts < to);
+  const total = l => l.reduce((s, e) => s + e.amount, 0);
+  const monthStart = (n) => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth() + (n || 0), 1).getTime(); };
+  const weekStart = () => { const t = sod(Date.now()); return t - ((new Date(t).getDay() + 6) % 7) * DAY; };
+  const uuid = () => (crypto.randomUUID && crypto.randomUUID()) || 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2);
+
+  function cashInHand() {
+    if (S.srv.opening === null || S.srv.opening === undefined) return null;
+    const since = S.srv.openingTs || 0;
+    return S.srv.opening + S.items.filter(e => e.ts >= since).reduce((s, e) => s + (e.type === 'in' ? e.amount : -e.amount), 0);
+  }
+  const lastCashIn = () => S.items.filter(e => e.type === 'in').sort((a, b) => b.ts - a.ts)[0];
+
+  // ---------- Shell ----------
+  const app = document.getElementById('app');
+  app.innerHTML = `<div class="scroll" id="scroll"></div>
+    <nav class="dock" aria-label="Main">
+      <div class="tabs glass"><span class="lens" id="lens"></span>
+        <button type="button" class="tab" data-a="tab" data-tab="home">${ic('house', 22)}Home</button>
+        <button type="button" class="tab" data-a="tab" data-tab="history">${ic('list', 22)}History</button>
+        <button type="button" class="tab" data-a="tab" data-tab="settings">${ic('settings-2', 22)}Settings</button>
+      </div>
+      <button type="button" class="fab" data-a="add" aria-label="Log an expense">${ic('plus', 28, 2.4)}</button>
+    </nav>
+    <div class="layer" id="layer"><div class="scrim" data-a="close"></div><div class="sheet" id="sheet"></div></div>
+    <div class="toast" id="toast" role="status"></div>`;
+  const scroll = document.getElementById('scroll'), layer = document.getElementById('layer'), sheetEl = document.getElementById('sheet'), toastEl = document.getElementById('toast');
+
+  function applyTheme() { if (S.cfg.theme === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', S.cfg.theme); }
+  applyTheme();
+
+  function render(keep) {
+    const y = scroll.scrollTop;
+    scroll.innerHTML = S.tab === 'home' ? home() : S.tab === 'history' ? history() : settings();
+    scroll.scrollTop = keep ? y : 0;
+    document.getElementById('lens').style.transform = `translateX(${['home', 'history', 'settings'].indexOf(S.tab) * 100}%)`;
+    app.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === S.tab));
+  }
+
+  function chipInner() {
+    if (!configured()) return `${ic('cloud-off', 14, 2.2)}Not connected`;
+    if (S.busy) return `${ic('refresh-cw', 13, 2.6).replace('<svg', '<svg class="spin"')}Syncing`;
+    if (S.syncError && S.syncKind === 'network') return `${ic('cloud-off', 14, 2.4)}${S.pending.length ? S.pending.length + ' waiting' : 'Offline'}`;
+    if (S.syncError) return `${ic('triangle-alert', 14, 2.4)}Sync problem`;
+    if (S.pending.length) return `${ic('cloud', 14, 2.4)}${S.pending.length} waiting`;
+    if (S.cfg.live) return `<i class="dot"></i>Live`;
+    return `${ic('check', 14, 2.6)}Synced`;
+  }
+  function liveChip() { return `<button type="button" class="live${S.busy || S.syncError || S.pending.length ? ' busy' : ''}" data-a="${configured() ? 'sync' : 'tab'}" data-tab="settings" id="live" aria-label="Sync status. Tap to sync now.">${chipInner()}</button>`; }
+  function updateChip() {
+    const el = document.getElementById('live'); if (el) el.outerHTML = liveChip();
+    const st = document.getElementById('sync-status'); if (st) { st.textContent = statusText(); st.className = 'status-line' + (S.syncError ? ' err' : ''); }
+  }
+
+  // ---------- Home ----------
+  function home() {
+    const now = Date.now(), today = sod(now), ms = monthStart(), mPrev = monthStart(-1), dNow = new Date();
+    const dim = new Date(dNow.getFullYear(), dNow.getMonth() + 1, 0).getDate(), dom = dNow.getDate();
+    const tList = outs(today, today + DAY), wList = outs(weekStart(), today + DAY), mList = outs(ms, today + DAY);
+    const mTotal = total(mList), prevSame = total(outs(mPrev, Math.min(mPrev + dom * DAY, ms)));
+    const cash = cashInHand(), lastIn = lastCashIn();
+    // Average per day over the last 30 days, or since the first entry if that's more recent (needs 3+ days of history)
+    const firstTs = S.items.reduce((m, e) => Math.min(m, e.ts), Infinity);
+    const span = Math.min(30, Math.round((today - sod(firstTs)) / DAY));
+    const usual = span >= 3 ? total(outs(today - span * DAY, today)) / span : 0;
+
+    let h = `<div class="top"><span class="date-line">${dstr(now, { weekday: 'long', day: 'numeric', month: 'long' })}</span>${liveChip()}</div>`;
+    if (!configured()) h += `<button type="button" class="banner" data-a="tab" data-tab="settings">${icBox({ icon: 'sheet', color: '#1d7a4b' }, 38)}<span style="flex:1"><b>Connect your Google Sheet</b><span class="s">Entries stay on this phone until you add your web app URL and secret.</span></span>${ic('chevron-right', 18, 2.2)}</button>`;
+
+    if (cash === null) {
+      h += `<section class="note empty" aria-label="Cash in hand"><div class="lbl">${ic('wallet', 15, 2.2)}Cash in hand</div>
+        <div class="amt">Count your wallet to start</div><div class="sub">Enter what you have now. Cash Book then keeps it up to date as you spend and add cash.</div>
+        <div class="acts"><button type="button" data-a="count">${ic('scale', 15, 2.2)}Count wallet</button></div></section>`;
+    } else {
+      h += `<section class="note" aria-label="Cash in hand"><div class="lbl">${ic('wallet', 15, 2.2)}Cash in hand</div>
+        <div class="amt num">${fmt(cash, 0)}</div>
+        <div class="sub">${lastIn && lastIn.ts >= (S.srv.openingTs || 0) ? `Last added ${fmt(lastIn.amount, 0)} ${sod(lastIn.ts) === today ? 'today' : 'on ' + dstr(lastIn.ts, { day: 'numeric', month: 'short' })}` : `Counted ${sod(S.srv.openingTs) === today ? 'today' : 'on ' + dstr(S.srv.openingTs, { day: 'numeric', month: 'short' })}`}</div>
+        <div class="acts"><button type="button" data-a="add-in">${ic('plus', 15, 2.4)}Add cash</button><button type="button" data-a="count">${ic('scale', 15, 2.2)}Count wallet</button></div></section>`;
+    }
+
+    h += `<div class="periods">
+      <button type="button" data-a="period" data-r="today"><div class="k">Today</div><div class="v num">${fmt(total(tList), 0)}</div><div class="c">${tList.length} ${tList.length === 1 ? 'entry' : 'entries'}</div></button>
+      <button type="button" data-a="period" data-r="week"><div class="k">This week</div><div class="v num">${short(total(wList))}</div><div class="c">${wList.length} ${wList.length === 1 ? 'entry' : 'entries'}</div></button>
+      <button type="button" data-a="period" data-r="month"><div class="k">${dstr(now, { month: 'long' })}</div><div class="v num">${short(mTotal)}</div><div class="c">${mList.length} ${mList.length === 1 ? 'entry' : 'entries'}</div></button></div>`;
+
+    // Budget
+    if (!S.srv.budget) {
+      h += `<section class="panel"><button type="button" class="cta" data-a="budget">${icBox({ icon: 'target', color: '#16181b' }, 38)}<span class="g"><b>Set a monthly budget</b><small>See what's left, a safe amount per day, and whether you're on pace.</small></span>${ic('chevron-right', 18, 2.2)}</button></section>`;
+    } else {
+      const B = S.srv.budget, left = B - mTotal, daysLeft = dim - dom + 1, pct = Math.min(mTotal / B, 1), pace = dom / dim, ahead = mTotal - B * pace;
+      h += `<section class="panel"><div class="panel-h"><h2>${dstr(now, { month: 'long' })} budget</h2><button type="button" class="link" data-a="budget">${fmt(B, 0)}</button></div>
+        <div class="budget-big num">${fmt(Math.abs(left), 0)}<small>${left >= 0 ? 'left to spend' : 'over budget'}</small></div>
+        <div class="meter" role="img" aria-label="${Math.round(mTotal / B * 100)}% of budget used"><i class="${left < 0 ? 'over' : ''}" style="width:${(pct * 100).toFixed(1)}%"></i><b style="left:calc(${(pace * 100).toFixed(1)}% - 1px)"></b></div>
+        <div class="budget-foot"><span>${Math.round(mTotal / B * 100)}% used</span><span>${left > 0 ? `${fmt(left / daysLeft, 0)} a day for ${daysLeft} day${daysLeft === 1 ? '' : 's'}` : 'Budget used up'}</span></div>
+        <div class="pace ${ahead > 0 ? 'bad' : 'ok'}">${ic(ahead > 0 ? 'trending-up' : 'trending-down', 15, 2.4)}${ahead > 0 ? `${fmt(ahead, 0)} ahead of an even pace` : `${fmt(-ahead, 0)} under an even pace`}</div>
+        ${cash !== null ? `<div class="wallet-line">${ic('wallet', 15, 2.2)}<span>${walletLine(cash, left, usual)}</span></div>` : ''}</section>`;
+    }
+
+    // Log again
+    const combos = {};
+    S.items.filter(e => e.type !== 'in' && e.note).forEach(e => { const k = e.note + '|' + e.amount + '|' + catOf(e).name; combos[k] = (combos[k] || 0) + 1; });
+    const top = Object.entries(combos).filter(x => x[1] >= 2).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k]) => k.split('|'));
+    if (top.length) {
+      h += `<section class="panel"><div class="panel-h"><h2>Log again</h2><span class="aside">One tap</span></div><div class="quick">${top.map(([note, amt, cat]) =>
+        `<button type="button" data-a="quick" data-n="${esc(note)}" data-v="${amt}" data-c="${esc(cat)}">${icBox(catOf({ category: cat }), 34)}<span><span class="q-t">${esc(note)}</span><span class="q-a num">${fmt(Number(amt), 0)}</span></span></button>`).join('')}</div></section>`;
+    }
+
+    // Where it went
+    const by = {}, byPrev = {};
+    mList.forEach(e => { const n = catOf(e).name; by[n] = (by[n] || 0) + e.amount; });
+    outs(mPrev, Math.min(mPrev + dom * DAY, ms)).forEach(e => { const n = catOf(e).name; byPrev[n] = (byPrev[n] || 0) + e.amount; });
+    const cats = Object.entries(by).sort((a, b) => b[1] - a[1]);
+    if (cats.length) {
+      h += `<section class="panel"><div class="panel-h"><h2>Where it went</h2><span class="aside">vs same days last month</span></div>
+        <div class="mix" role="img" aria-label="Spending split by category">${cats.map(([c, v]) => `<span style="flex:${v};background:${catOf({ category: c }).color}"></span>`).join('')}</div>
+        <div class="cats">${cats.slice(0, 8).map(([c, v]) => {
+          const p = byPrev[c] || 0, d = p ? Math.round((v - p) / p * 100) : null;
+          return `<button type="button" class="cat" data-a="cat-hist" data-c="${esc(c)}">${icBox(catOf({ category: c }), 36)}<span class="tx"><span class="n" style="display:block">${esc(c)}</span>
+            <span class="v num">${fmt(v, 0)}</span> ${d === null ? '<span class="d" style="color:var(--muted)">new</span>' : `<span class="d ${d > 0 ? 'up' : 'dn'}">${d > 0 ? '+' : ''}${d}%</span>`}</span></button>`; }).join('')}</div></section>`;
+    }
+
+    // Last 7 days
+    const days = [];
+    for (let i = 6; i >= 0; i--) { const s = today - i * DAY; days.push({ s, v: total(outs(s, s + DAY)) }); }
+    const max = Math.max(...days.map(d => d.v), 1);
+    h += `<section class="panel"><div class="panel-h"><h2>Last 7 days</h2><span class="aside num">${fmt(days.reduce((a, d) => a + d.v, 0), 0)}</span></div>
+      <div class="week">${days.map(d => `<button type="button" class="wk${d.s === today ? ' today' : ''}" data-a="day" data-s="${d.s}" aria-label="${dstr(d.s, { weekday: 'long' })} ${fmt(d.v, 0)}">
+        <span class="val num">${d.v ? short(d.v) : ''}</span><span class="bar${d.s === today ? ' today' : ''}" style="height:${Math.max(d.v / max * 86, 4).toFixed(0)}px"></span><span class="day">${dstr(d.s, { weekday: 'narrow' })}</span></button>`).join('')}</div>
+      ${usual > 0 ? `<div class="avg-line">You usually spend about ${fmt(usual, 0)} a day.</div>` : ''}</section>`;
+
+    // Worth knowing
+    const facts = [];
+    if (prevSame && mTotal) { const d = Math.round((mTotal - prevSame) / prevSame * 100); facts.push(['calendar-range', `You've spent <b>${Math.abs(d)}% ${d >= 0 ? 'more' : 'less'}</b> than by this date last month.`]); }
+    const biggest = mList.slice().sort((a, b) => b.amount - a.amount)[0];
+    if (biggest) facts.push(['arrow-up-wide-narrow', `Biggest this month: <b>${fmt(biggest.amount, 0)}</b> on ${esc(biggest.note || catOf(biggest).name)}, ${dstr(biggest.ts, { day: 'numeric', month: 'short' })}.`]);
+    const freq = {}; mList.forEach(e => { const k = e.note || catOf(e).name; freq[k] = (freq[k] || 0) + 1; });
+    const fav = Object.entries(freq).sort((a, b) => b[1] - a[1])[0];
+    if (fav && fav[1] > 2) facts.push(['repeat', `Most frequent: <b>${esc(fav[0])}</b>, ${fav[1]} times this month.`]);
+    const recentOuts = outs(today - 55 * DAY, today + DAY);
+    if (recentOuts.length > 14) {
+      const wd = [0, 0, 0, 0, 0, 0, 0]; recentOuts.forEach(e => wd[new Date(e.ts).getDay()] += e.amount);
+      facts.push(['calendar-days', `<b>${['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'][wd.indexOf(Math.max(...wd))]}</b> are your most expensive day of the week.`]);
+    }
+    if (facts.length) h += `<section class="panel"><div class="panel-h"><h2>Worth knowing</h2></div><div class="facts">${facts.map(([i, t]) => `<div class="fact"><span class="ic">${ic(i, 16, 2.2)}</span><span>${t}</span></div>`).join('')}</div></section>`;
+
+    // Recent
+    const recent = S.items.slice().sort((a, b) => b.ts - a.ts).slice(0, 5);
+    h += `<section class="panel" style="padding-bottom:6px"><div class="panel-h" style="margin-bottom:2px"><h2>Recent</h2>${recent.length ? '<button type="button" class="link" data-a="tab" data-tab="history">See all</button>' : ''}</div>
+      ${recent.length ? recent.map(e => row(e, true)).join('') : `<div class="empty" style="padding:22px 10px">${ic('banknote', 34, 1.6)}<div>Nothing logged yet. Tap + to log your first cash expense.</div></div>`}</section>`;
+    return h;
+  }
+
+  function walletLine(cash, left, usual) {
+    const lasts = usual > 0 ? Math.floor(Math.max(cash, 0) / usual) : 0;
+    let s = `<b>${fmt(cash, 0)}</b> in your wallet`;
+    s += usual > 0 ? (lasts < 1 ? `, less than a day at your usual ${fmt(usual, 0)} a day.` : `, about ${lasts} day${lasts === 1 ? '' : 's'} at your usual ${fmt(usual, 0)} a day.`) : '.';
+    if (left > cash) s += ` To spend the rest of your budget you'd need ${fmt(left - cash, 0)} more cash.`;
+    else if (left > 0) s += ` That's more than your budget has left.`;
+    return s;
+  }
+
+  function row(e, withDay) {
+    const c = catOf(e), fresh = S.fresh.has(e.id), isIn = e.type === 'in', waiting = pendingIds().has(e.id);
+    const dn = dayName(e.ts);
+    const when = withDay ? (dn === 'Today' || dn === 'Yesterday' ? dn : dstr(e.ts, { day: 'numeric', month: 'short' })) + ', ' + time(e.ts) : time(e.ts);
+    const place = (e.place || '').split(',').map(s => s.trim()).find(s => s && !/^[\d\s\-/]+$/.test(s)) || (e.lat != null ? 'Location saved' : '');
+    return `<button type="button" class="row${fresh ? ' fresh' : ''}" data-a="edit" data-id="${esc(e.id)}">${icBox(c, 40)}
+      <span class="mid"><span class="t" style="display:block">${esc(e.note || c.name)}${fresh ? '<span class="newtag">NEW</span>' : ''}${waiting ? '<span class="pend-dot" title="Waiting to sync"></span>' : ''}</span>
+      <span class="s"><span>${e.note && !isIn ? esc(c.name) + ', ' : ''}${when}</span>${place ? ic('map-pin', 11, 2.2) + `<span>${esc(place)}</span>` : ''}</span></span>
+      <span class="a num${isIn ? ' in' : ''}">${isIn ? '+' : ''}${fmt(e.amount)}</span></button>`;
+  }
+  function pendingIds() { return new Set(S.pending.map(p => p.item ? p.item.id : p.id)); }
+
+  // ---------- History ----------
+  const RANGES = [['all', 'All time'], ['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'This week'], ['7', 'Last 7 days'], ['month', 'This month'], ['lastmonth', 'Last month'], ['30', 'Last 30 days']];
+  function rangeBounds(r) {
+    const t = sod(Date.now());
+    switch (r) {
+      case 'today': return [t, t + DAY];
+      case 'yesterday': return [t - DAY, t];
+      case 'week': return [weekStart(), t + DAY];
+      case '7': return [t - 6 * DAY, t + DAY];
+      case 'month': return [monthStart(), t + DAY];
+      case 'lastmonth': return [monthStart(-1), monthStart()];
+      case '30': return [t - 29 * DAY, t + DAY];
+      case 'custom': return [S.hist.from ? new Date(S.hist.from + 'T00:00').getTime() : 0, S.hist.to ? new Date(S.hist.to + 'T00:00').getTime() + DAY : Infinity];
+      default: return [0, Infinity];
+    }
+  }
+  function rangeLabel() {
+    if (S.hist.range === 'custom') {
+      const f = S.hist.from ? dstr(new Date(S.hist.from + 'T00:00'), { day: 'numeric', month: 'short' }) : 'Start';
+      const t = S.hist.to ? dstr(new Date(S.hist.to + 'T00:00'), { day: 'numeric', month: 'short' }) : 'today';
+      return f === t ? f : f + ' to ' + t;
+    }
+    return (RANGES.find(r => r[0] === S.hist.range) || RANGES[0])[1];
+  }
+  function filtered() {
+    const [a, b] = rangeBounds(S.hist.range), q = S.hist.q.trim().toLowerCase();
+    const l = S.items.filter(e => e.ts >= a && e.ts < b
+      && (S.hist.type === 'all' || (S.hist.type === 'in' ? e.type === 'in' : e.type !== 'in'))
+      && (!S.hist.cats.length || (e.type !== 'in' && S.hist.cats.includes(catOf(e).name)))
+      && (!q || [e.note, catOf(e).name, e.place, String(e.amount)].some(x => String(x || '').toLowerCase().includes(q))));
+    const sorts = { new: (x, y) => y.ts - x.ts, old: (x, y) => x.ts - y.ts, high: (x, y) => y.amount - x.amount, low: (x, y) => x.amount - y.amount };
+    return l.sort(sorts[S.hist.sort]);
+  }
+  function catNames() { return [...new Set(CATS.map(c => c.name).concat(S.items.filter(e => e.type !== 'in').map(e => catOf(e).name)))]; }
+  function history() {
+    const H = S.hist;
+    const catLabel = !H.cats.length ? 'All categories' : H.cats.length === 1 ? H.cats[0] : H.cats.length + ' categories';
+    return `<div class="top"><span class="date-line">History</span>${liveChip()}</div><h1 class="screen-title">Every rupee</h1>
+      <label class="search">${ic('search', 17, 2.2)}<input id="q" type="search" placeholder="Search notes, places or amounts" value="${esc(H.q)}" autocomplete="off"></label>
+      <div class="filters">
+        <button type="button" class="fbtn${H.range !== 'all' ? ' on' : ''}" data-a="f-date">${ic('calendar', 15, 2.2)}${esc(rangeLabel())}${ic('chevron-down', 14, 2.4)}</button>
+        <button type="button" class="fbtn${H.cats.length ? ' on' : ''}" data-a="f-cat">${ic('shapes', 15, 2.2)}${esc(catLabel)}${ic('chevron-down', 14, 2.4)}</button>
+        <button type="button" class="fbtn${H.type !== 'all' ? ' on' : ''}" data-a="f-type">${ic('arrow-left-right', 15, 2.2)}${H.type === 'all' ? 'Spent and added' : H.type === 'out' ? 'Spent only' : 'Cash added only'}</button>
+        <button type="button" class="fbtn${H.sort !== 'new' ? ' on' : ''}" data-a="f-sort">${ic('arrow-down-up', 15, 2.2)}${{ new: 'Newest', old: 'Oldest', high: 'Highest', low: 'Lowest' }[H.sort]}</button>
+      </div><div id="hl">${historyList()}</div>`;
+  }
+  function historyList() {
+    const l = filtered(), H = S.hist;
+    const spent = total(l.filter(e => e.type !== 'in')), added = total(l.filter(e => e.type === 'in'));
+    const dirty = H.range !== 'month' || H.cats.length || H.type !== 'all' || H.q || H.sort !== 'new';
+    let h = `<div class="result"><div class="l">${l.length} ${l.length === 1 ? 'entry' : 'entries'}, ${esc(rangeLabel().toLowerCase())}<b class="num">${fmt(spent, 0)} spent</b></div>
+      <div class="r">${added ? `<b class="num">+${fmt(added, 0)}</b> added<br>` : ''}${dirty ? '<button type="button" class="clear" data-a="f-reset">Reset filters</button>' : ''}</div></div>`;
+    if (!l.length) return h + `<div class="empty">${ic('search-x', 40, 1.6)}<div>${S.items.length ? 'No entries match these filters.' : 'No entries yet. Tap + to log one.'}</div></div>`;
+    if (H.sort === 'high' || H.sort === 'low') return h + `<div class="daybox" style="margin-top:10px">${l.map(e => row(e, true)).join('')}</div>`;
+    const groups = [], map = {};
+    l.forEach(e => { const k = sod(e.ts); if (!map[k]) { map[k] = { k, items: [] }; groups.push(map[k]); } map[k].items.push(e); });
+    return h + groups.map(g => { const s = total(g.items.filter(e => e.type !== 'in'));
+      return `<div class="dayh"><span>${dayName(g.k)}</span><span class="num">${s ? fmt(s, 0) : ''}</span></div><div class="daybox">${g.items.map(e => row(e)).join('')}</div>`; }).join('');
+  }
+
+  // ---------- Settings ----------
+  function statusText() {
+    if (!configured()) return 'Paste the Web app URL from Apps Script (it ends in /exec) and the SECRET from Code.gs.';
+    if (S.busy) return 'Syncing…';
+    if (S.syncError) return S.syncError;
+    const w = S.pending.length ? ` ${S.pending.length} change${S.pending.length === 1 ? '' : 's'} waiting to sync.` : '';
+    if (S.lastSynced) return 'Last synced ' + dstr(S.lastSynced, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) + '.' + w;
+    return 'Not synced yet.' + w;
+  }
+  function settings() {
+    let currencies = [];
+    try { currencies = Intl.supportedValuesOf('currency'); } catch (e) { currencies = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'PKR', 'CAD', 'AUD', 'SGD', 'JPY']; }
+    if (!currencies.includes(S.cfg.currency)) currencies.unshift(S.cfg.currency);
+    let dn = null; try { dn = new Intl.DisplayNames(['en-IN'], { type: 'currency' }); } catch (e) {}
+    const cash = cashInHand();
+    return `<div class="top"><span class="date-line">Settings</span>${liveChip()}</div><h1 class="screen-title">Settings</h1>
+      <div class="group-t">Google Sheet</div>
+      <div class="group">
+        <div class="sr"><span class="stack"><label for="set-url">Web app URL</label><textarea id="set-url" rows="2" placeholder="https://script.google.com/macros/s/…/exec" autocapitalize="off" autocorrect="off" spellcheck="false">${esc(S.cfg.url)}</textarea></span></div>
+        <div class="sr"><span class="stack"><label for="set-secret">Secret key</label><input class="txt" id="set-secret" type="password" placeholder="The SECRET from Code.gs" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(S.cfg.secret)}"></span></div>
+        <button type="button" class="sr" data-a="sync"><span class="g" style="color:var(--go);font-weight:600">Sync now</span>${ic('refresh-cw', 17, 2.2)}</button>
+        <button type="button" class="sr" data-a="live"><span class="g">Live updates<small>${S.cfg.live ? 'On. Checks for new entries every 20 seconds while the app is open.' : 'Off. Syncs when you open the app, come back to it, or tap Sync.'}</small></span><span class="sw${S.cfg.live ? ' on' : ''}" role="switch" aria-checked="${S.cfg.live}"></span></button>
+      </div>
+      <div class="status-line${S.syncError ? ' err' : ''}" id="sync-status">${esc(statusText())}</div>
+      <div class="group-t">Money</div>
+      <div class="group">
+        <button type="button" class="sr" data-a="budget"><span class="g">Monthly budget</span><span class="val num">${S.srv.budget ? fmt(S.srv.budget, 0) : 'Not set'}</span>${ic('chevron-right', 16, 2.2)}</button>
+        <button type="button" class="sr" data-a="count"><span class="g">Cash in hand<small>Count your wallet to correct it</small></span><span class="val num">${cash === null ? 'Not set' : fmt(cash, 0)}</span>${ic('chevron-right', 16, 2.2)}</button>
+        <label class="sr"><span class="g">Currency</span><select id="set-currency">${currencies.map(c => `<option value="${c}" ${c === S.cfg.currency ? 'selected' : ''}>${c}${dn ? ' – ' + esc(dn.of(c)) : ''}</option>`).join('')}</select>${ic('chevron-down', 16, 2.2)}</label>
+      </div>
+      <div class="group-t">Appearance</div>
+      <div class="group"><div class="sr"><span class="g">Theme</span><span class="seg">${['system', 'light', 'dark'].map(t => `<button type="button" class="${S.cfg.theme === t ? 'on' : ''}" data-a="theme" data-t="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</span></div></div>
+      <div class="group-t">On this phone</div>
+      <div class="group"><div class="sr"><span class="g">Entries</span><span class="val num">${S.items.length}</span></div><div class="sr"><span class="g">Waiting to sync</span><span class="val num">${S.pending.length}</span></div></div>
+      <div class="status-line">Your URL and secret are stored only on this phone. Everything else lives in your Google Sheet.</div>`;
+  }
+
+  // ---------- Sheets ----------
+  function openSheet(html, tall) {
+    sheetEl.className = 'sheet' + (tall ? ' tall' : '');
+    sheetEl.innerHTML = '<div class="grab"></div>' + html;
+    layer.classList.add('open');
+  }
+  function closeSheet() { layer.classList.remove('open'); S.sheet = null; S.form = null; if (document.activeElement) document.activeElement.blur(); }
+
+  function openEntry(e, type) {
+    S.sheet = 'entry';
+    S.form = e ? { id: e.id, type: e.type === 'in' ? 'in' : 'out', amount: String(e.amount), cat: catOf(e).name, note: e.note, ts: e.ts, place: e.place, lat: e.lat, lng: e.lng, loc: (e.lat != null || e.place) ? 'found' : 'none' }
+      : { id: null, type: type || 'out', amount: '', cat: '', note: '', ts: Date.now(), place: '', lat: null, lng: null, loc: 'finding', token: Math.random() };
+    entrySheet();
+    if (!e) findLocation();
+  }
+  function findLocation() {
+    const f = S.form; if (!f) return;
+    const token = f.token = Math.random();
+    if (!navigator.geolocation) { f.loc = 'none'; updateLoc(); return; }
+    f.loc = 'finding'; updateLoc();
+    navigator.geolocation.getCurrentPosition(p => {
+      if (!S.form || S.form.token !== token) return;
+      S.form.lat = Math.round(p.coords.latitude * 1e6) / 1e6; S.form.lng = Math.round(p.coords.longitude * 1e6) / 1e6; S.form.place = ''; S.form.loc = 'found'; updateLoc();
+    }, () => { if (S.form && S.form.token === token) { S.form.loc = 'none'; updateLoc(); } }, { enableHighAccuracy: false, timeout: 12000, maximumAge: 120000 });
+  }
+  function locChip() {
+    const f = S.form;
+    if (f.loc === 'finding') return `${ic('refresh-cw', 13, 2.4).replace('<svg', '<svg class="spin"')}Finding location`;
+    if (f.loc === 'found') return `${ic('map-pin', 14, 2.2)}${esc((f.place || '').split(',')[0] || 'Location added')}`;
+    return `${ic('map-pin', 14, 2.2)}Add location`;
+  }
+  function updateLoc() { const el = document.getElementById('loc'); if (el && S.form) el.innerHTML = locChip(); }
+
+  const typed = a => { const [i, d] = a.split('.'); return new Intl.NumberFormat('en-IN').format(Number(i || 0)) + (d !== undefined ? '.' + d : ''); };
+  const canSave = () => Number(S.form.amount) > 0 && (S.form.type === 'in' || !!S.form.cat);
+  function entrySheet() {
+    const f = S.form, editing = !!f.id, isIn = f.type === 'in';
+    const pickCats = CATS.slice();
+    if (f.cat && !pickCats.find(c => c.name === f.cat) && !isIn) pickCats.push(catOf({ category: f.cat }));
+    const label = !canSave() ? (Number(f.amount) > 0 ? 'Pick a category' : 'Enter an amount') : (editing ? 'Save changes' : isIn ? 'Add ' + fmt(Number(f.amount)) + ' to wallet' : 'Log ' + fmt(Number(f.amount)));
+    openSheet(`<div class="sh"><button type="button" class="x" data-a="close">Cancel</button><span class="t">${editing ? 'Edit entry' : isIn ? 'Add cash' : 'New expense'}</span><span></span></div>
+      <div class="sb">
+        <div class="kind"><span class="seg"><button type="button" class="${isIn ? '' : 'on'}" data-a="kind" data-k="out">Spent</button><button type="button" class="${isIn ? 'on' : ''}" data-a="kind" data-k="in">Cash added</button></span></div>
+        <div class="amount"><span class="v num${isIn ? ' in' : ''}"><span class="cur">${esc(sym())}</span>${f.amount ? esc(typed(f.amount)) : '<span class="ph">0</span>'}<span class="caret"></span></span></div>
+        ${isIn ? '' : `<div class="pick">${pickCats.map(c => `<button type="button" class="${f.cat === c.name ? 'on' : ''}" data-a="pick" data-c="${esc(c.name)}">${icBox(c, 48, f.cat === c.name)}<span>${esc(c.name)}</span></button>`).join('')}</div>`}
+        <label class="field">${ic('pencil-line', 17, 2.2)}<input id="note" placeholder="${isIn ? 'Where it came from (ATM, a friend…)' : 'What was it for? (optional)'}" value="${esc(f.note)}" autocomplete="off" enterkeyhint="done"></label>
+        <div class="metas"><label class="meta">${ic('clock', 14, 2.2)}<span>${sod(f.ts) === sod(Date.now()) ? 'Today' : dstr(f.ts, { day: 'numeric', month: 'short' })}, ${time(f.ts)}</span><input type="datetime-local" id="when-in" value="${isoLocal(f.ts)}" max="${isoLocal(Date.now())}" aria-label="Change date and time"></label>
+          <button type="button" class="meta" id="loc" data-a="loc">${locChip()}</button></div>
+        <div class="keys">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'].map(k => k === 'back'
+          ? `<button type="button" class="fn" data-a="key" data-k="back" aria-label="Delete digit">${ic('delete', 25, 2)}</button>`
+          : `<button type="button" class="${k === '.' ? 'fn' : ''}" data-a="key" data-k="${k}">${k}</button>`).join('')}</div>
+      </div>
+      <div class="sf"><button type="button" class="primary" data-a="save" ${canSave() ? '' : 'disabled'}>${label}</button>
+        ${editing ? '<button type="button" class="danger" data-a="del">Delete entry</button>' : ''}</div>`, true);
+  }
+  function dateSheet() {
+    S.sheet = 'date';
+    const H = S.hist;
+    openSheet(`<div class="sh"><span></span><span class="t">Date range</span><button type="button" class="ok" data-a="close">Done</button></div>
+      <div class="sb"><div class="opts">${RANGES.map(([k, l]) => `<button type="button" class="opt${H.range === k ? ' on' : ''}" data-a="range" data-r="${k}">${l}${H.range === k ? ic('check', 16, 2.6) : ''}</button>`).join('')}</div>
+        <div class="sec-t">Or pick your own dates</div>
+        <div class="range"><label>From<input type="date" id="from" value="${H.from}" max="${iso(Date.now())}"></label><label>To<input type="date" id="to" value="${H.to}" max="${iso(Date.now())}"></label></div><div style="height:14px"></div></div>`);
+  }
+  function catSheet() {
+    S.sheet = 'cat';
+    openSheet(`<div class="sh"><button type="button" class="x" data-a="cats-clear">Clear</button><span class="t">Categories</span><button type="button" class="ok" data-a="close">Done</button></div>
+      <div class="sb"><div class="catlist">${catNames().map(n => { const c = catOf({ category: n });
+        return `<button type="button" class="${S.hist.cats.includes(n) ? 'on' : ''}" data-a="cat-toggle" data-c="${esc(n)}">${icBox(c, 32)}<span class="g">${esc(n)}</span><span class="check">${ic('check', 15, 3)}</span></button>`; }).join('')}</div></div>`, catNames().length > 9);
+  }
+  function choiceSheet(kind) {
+    S.sheet = kind;
+    const opts = kind === 'type' ? [['all', 'Spent and added'], ['out', 'Spent only'], ['in', 'Cash added only']] : [['new', 'Newest first'], ['old', 'Oldest first'], ['high', 'Highest amount'], ['low', 'Lowest amount']];
+    const cur = kind === 'type' ? S.hist.type : S.hist.sort;
+    openSheet(`<div class="sh"><span></span><span class="t">${kind === 'type' ? 'Show' : 'Sort by'}</span><button type="button" class="ok" data-a="close">Done</button></div>
+      <div class="sb"><div class="catlist">${opts.map(([v, l]) => `<button type="button" class="${cur === v ? 'on' : ''}" data-a="choose" data-v="${v}"><span class="g">${l}</span><span class="check">${ic('check', 15, 3)}</span></button>`).join('')}</div></div>`);
+  }
+  function numberSheet(kind) {
+    S.sheet = kind;
+    const cash = cashInHand();
+    const start = kind === 'budget' ? S.srv.budget : cash;
+    S.form = { amount: start ? String(Math.round(start)) : '', untouched: true };
+    numberSheetRender();
+  }
+  function numberSheetRender() {
+    const k = S.sheet, f = S.form;
+    openSheet(`<div class="sh"><button type="button" class="x" data-a="close">Cancel</button><span class="t">${k === 'budget' ? 'Monthly budget' : 'Count your wallet'}</span><span></span></div>
+      <div class="sb"><p style="text-align:center;color:var(--muted);font-size:14px;margin:6px 8px 0">${k === 'budget' ? 'How much cash do you want to spend each month? Enter 0 to turn the budget off.' : 'Enter the cash you have right now. Cash Book keeps it up to date from here as you spend and add cash.'}</p>
+        <div class="amount"><span class="v num"><span class="cur">${esc(sym())}</span>${f.amount ? esc(typed(f.amount)) : '<span class="ph">0</span>'}<span class="caret"></span></span></div>
+        <div class="keys">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'back'].map(x => x === 'back' ? `<button type="button" class="fn" data-a="key" data-k="back" aria-label="Delete digit">${ic('delete', 25, 2)}</button>` : x ? `<button type="button" data-a="key" data-k="${x}">${x}</button>` : '<span></span>').join('')}</div></div>
+      <div class="sf"><button type="button" class="primary" data-a="num-save">${k === 'budget' ? 'Save budget' : 'Save cash in hand'}</button></div>`);
+  }
+
+  // ---------- Toast ----------
+  let undoFn = null;
+  function toast(html, opts) {
+    toastEl.className = 'toast' + (opts && opts.top ? ' top' : '');
+    toastEl.innerHTML = html + (opts && opts.undo ? '<button type="button" data-a="undo">Undo</button>' : '');
+    undoFn = opts && opts.undo || null;
+    requestAnimationFrame(() => toastEl.classList.add('show'));
+    clearTimeout(toast.t); toast.t = setTimeout(() => toastEl.classList.remove('show'), opts && opts.undo ? 4500 : 2600);
+  }
+
+  // ---------- Changes ----------
+  function upsert(e, op) {
+    const i = S.items.findIndex(x => x.id === e.id);
+    if (i >= 0) S.items[i] = e; else S.items.push(e);
+    S.pending.push({ op, item: e }); saveAll(); render(true); sync();
+  }
+  function removeItem(id) {
+    const e = S.items.find(x => x.id === id);
+    S.items = S.items.filter(x => x.id !== id);
+    S.pending.push({ op: 'delete', id }); saveAll(); render(true); sync();
+    return e;
+  }
+  function saveSrv(patch) {
+    Object.assign(S.srv, patch);
+    S.pending.push({ op: 'settings', data: patch }); saveAll(); render(true); sync();
+  }
+
+  // ---------- Google Sheet ----------
+  function apiError(kind, message) { const e = new Error(message); e.kind = kind; return e; }
+  async function call(url, opts) {
+    let res;
+    try { res = await fetch(url, opts); }
+    catch (e) { throw apiError('network', navigator.onLine ? 'Couldn’t reach your web app. Check the URL in Settings.' : 'You’re offline. Changes will sync when you’re back online.'); }
+    if (!res.ok) throw apiError('server', 'The web app answered with an error (HTTP ' + res.status + ').');
+    let data;
+    try { data = await res.json(); }
+    catch (e) { throw apiError('server', 'The web app didn’t send data back. Check the URL ends in /exec and the deployment access is “Anyone”.'); }
+    if (data.ok) return data;
+    const msg = data.error || 'Unknown error';
+    if (msg === 'Unauthorized' || msg.indexOf('Invalid or missing key') === 0) throw apiError('auth', 'The secret key doesn’t match SECRET in your Apps Script.');
+    if (msg.indexOf('Invalid amount') === 0) throw apiError('rejected', msg);
+    throw apiError('server', msg);
+  }
+  const endpoint = () => S.cfg.url.trim();
+  const key = () => S.cfg.secret.trim();
+  function send(p) {
+    const body = { key: key() };
+    if (p.op === 'delete') Object.assign(body, { action: 'delete', id: p.id });
+    else if (p.op === 'settings') Object.assign(body, { action: 'settings' }, p.data);
+    else {
+      const e = p.item;
+      Object.assign(body, { action: p.op, id: e.id, amount: e.amount, category: e.type === 'in' ? 'Cash in' : e.category, remarks: e.note, timestamp: new Date(e.ts).toISOString(), type: e.type === 'in' ? 'Added' : 'Spent' });
+      if (e.lat != null && e.lng != null) { body.lat = e.lat; body.lng = e.lng; }
+      if (e.place) body.address = e.place;
+    }
+    // text/plain avoids a CORS preflight, which Apps Script can't answer
+    return call(endpoint(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+  }
+  async function fetchAll() {
+    const u = endpoint() + (endpoint().includes('?') ? '&' : '?') + 'format=json&key=' + encodeURIComponent(key());
+    const d = await call(u, { cache: 'no-store' });
+    return {
+      version: d.version || null,
+      settings: d.settings || null,
+      rows: (d.rows || []).filter(r => r.id && r.ts).map(r => ({
+        id: String(r.id), ts: new Date(r.ts).getTime(), amount: Number(r.amount) || 0, category: r.category || 'Other',
+        note: r.remarks || '', place: r.address || '', lat: r.lat == null ? null : Number(r.lat), lng: r.lng == null ? null : Number(r.lng),
+        type: r.type === 'in' ? 'in' : 'out'
+      }))
+    };
+  }
+  function applyPending(rows) {
+    let list = rows.slice();
+    for (const p of S.pending) {
+      if (p.op === 'delete') list = list.filter(x => x.id !== p.id);
+      else if (p.item) { const i = list.findIndex(x => x.id === p.item.id); if (i >= 0) list[i] = p.item; else list.push(p.item); }
+    }
+    return list;
+  }
+
+  async function sync() {
+    if (DEMO || !configured()) { updateChip(); return; }
+    if (S.busy) { S.again = true; return; }
+    S.busy = true; updateChip();
+    let newFromSheet = [];
+    try {
+      do {
+        S.again = false;
+        let skipped = null;
+        while (S.pending.length) {
+          try { await send(S.pending[0]); }
+          catch (err) { if (err.kind === 'rejected') skipped = 'One entry was skipped: ' + err.message; else throw err; }
+          S.pending.shift(); saveAll();
+        }
+        const known = new Set(S.items.map(x => x.id));
+        const d = await fetchAll();
+        if (S.loadedOnce) newFromSheet = newFromSheet.concat(d.rows.filter(r => !known.has(r.id)));
+        S.items = applyPending(d.rows);
+        if (d.settings && !S.pending.some(p => p.op === 'settings')) S.srv = Object.assign({ budget: 0, opening: null, openingTs: null }, d.settings);
+        S.version = d.version; S.lastSynced = Date.now(); S.syncError = skipped; S.syncKind = ''; S.loadedOnce = true;
+        saveAll();
+      } while (S.again);
+    } catch (err) {
+      S.syncError = err.message || String(err); S.syncKind = err.kind || '';
+    }
+    S.busy = false;
+    if (newFromSheet.length) {
+      newFromSheet.forEach(r => S.fresh.add(r.id));
+      const f = newFromSheet[newFromSheet.length - 1];
+      toast(`${ic('zap', 16, 2.4)}${newFromSheet.length > 1 ? newFromSheet.length + ' new entries from your Sheet' : 'New: ' + fmt(f.amount, 0) + ' ' + esc(f.note || catOf(f).name)}`, { top: true });
+      setTimeout(() => { newFromSheet.forEach(r => S.fresh.delete(r.id)); }, 9000);
+    }
+    const typing = S.tab === 'settings' && document.activeElement && /^set-/.test(document.activeElement.id || '');
+    if (typing || S.sheet) updateChip(); else render(true);
+  }
+
+  // Live updates: a tiny "has anything changed?" check, then a full sync only when it has
+  async function liveCheck() {
+    if (!S.cfg.live || !configured() || DEMO || S.busy || document.visibilityState !== 'visible') return;
+    try {
+      const u = endpoint() + (endpoint().includes('?') ? '&' : '?') + 'format=version&key=' + encodeURIComponent(key());
+      const d = await call(u, { cache: 'no-store' });
+      if (d.version && d.version !== S.version) sync();
+    } catch (e) { /* stay quiet; the next check or a manual sync will show problems */ }
+  }
+  setInterval(liveCheck, 20000);
+
+  // ---------- Events ----------
+  app.addEventListener('click', (ev) => {
+    const el = ev.target.closest('[data-a]'); if (!el || el.disabled) return;
+    const a = el.dataset.a, f = S.form;
+    switch (a) {
+      case 'tab': S.tab = el.dataset.tab; render(); break;
+      case 'add': openEntry(null, 'out'); break;
+      case 'add-in': openEntry(null, 'in'); break;
+      case 'count': numberSheet('count'); break;
+      case 'budget': numberSheet('budget'); break;
+      case 'edit': { const e = S.items.find(x => x.id === el.dataset.id); if (e) openEntry(e); break; }
+      case 'close': { const was = S.sheet; closeSheet(); if (['date', 'cat', 'type', 'sort'].includes(was)) render(true); break; }
+      case 'kind': f.type = el.dataset.k; entrySheet(); break;
+      case 'pick': f.cat = el.dataset.c; entrySheet(); break;
+      case 'loc': if (f.loc === 'found') { f.lat = f.lng = null; f.place = ''; f.loc = 'none'; updateLoc(); } else findLocation(); break;
+      case 'key': {
+        const k = el.dataset.k;
+        if (f.untouched) { f.untouched = false; if (k !== 'back') f.amount = ''; } // typing replaces the old value
+        if (k === 'back') f.amount = f.amount.slice(0, -1);
+        else if (k === '.') { if (!f.amount.includes('.')) f.amount = (f.amount || '0') + '.'; }
+        else { const [i, d] = f.amount.split('.'); if (d !== undefined ? d.length < 2 : (i || '').length < 7) f.amount = (f.amount === '0' ? '' : f.amount) + k; }
+        if (S.sheet === 'entry') entrySheet(); else numberSheetRender();
+        break;
+      }
+      case 'save': {
+        if (!canSave()) break;
+        const e = { id: f.id || uuid(), ts: f.ts, amount: Math.round(Number(f.amount) * 100) / 100, category: f.type === 'in' ? 'Cash in' : f.cat,
+          note: (document.getElementById('note') || {}).value !== undefined ? document.getElementById('note').value.trim() : f.note, place: f.place || '', lat: f.lat, lng: f.lng, type: f.type };
+        const editing = !!f.id; closeSheet(); upsert(e, editing ? 'update' : 'add');
+        if (navigator.vibrate) navigator.vibrate(10);
+        toast(`${ic('check', 16, 2.6)}${editing ? 'Changes saved' : e.type === 'in' ? 'Added ' + fmt(e.amount, 0) + ' to wallet' : 'Logged ' + fmt(e.amount, 0)}`);
+        break;
+      }
+      case 'del': {
+        if (el.dataset.sure !== '1') { el.dataset.sure = '1'; el.textContent = 'Tap again to delete'; break; }
+        const id = f.id; closeSheet(); const gone = removeItem(id);
+        toast(`${ic('trash-2', 16, 2.4)}Entry deleted`, { undo: () => upsert(gone, 'add') });
+        break;
+      }
+      case 'undo': if (undoFn) { const u = undoFn; undoFn = null; toastEl.classList.remove('show'); u(); } break;
+      case 'quick': {
+        const e = { id: uuid(), ts: Date.now(), amount: Number(el.dataset.v), category: el.dataset.c, note: el.dataset.n, place: '', lat: null, lng: null, type: 'out' };
+        upsert(e, 'add');
+        toast(`${ic('check', 16, 2.6)}Logged ${fmt(e.amount, 0)} ${esc(e.note)}`, { undo: () => removeItem(e.id) });
+        // add location in the background if we can get it quickly
+        if (navigator.geolocation) navigator.geolocation.getCurrentPosition(p => {
+          const it = S.items.find(x => x.id === e.id); if (!it) return;
+          const upd = Object.assign({}, it, { lat: Math.round(p.coords.latitude * 1e6) / 1e6, lng: Math.round(p.coords.longitude * 1e6) / 1e6 });
+          upsert(upd, 'update');
+        }, () => {}, { timeout: 8000, maximumAge: 300000 });
+        break;
+      }
+      case 'num-save': {
+        const v = Math.round(Number(f.amount) || 0), kind = S.sheet;
+        closeSheet();
+        if (kind === 'budget') { saveSrv({ budget: v }); toast(`${ic('check', 16, 2.6)}${v ? 'Budget set to ' + fmt(v, 0) : 'Budget turned off'}`); }
+        else { saveSrv({ opening: v, openingTs: Date.now() }); toast(`${ic('check', 16, 2.6)}Cash in hand set to ${fmt(v, 0)}`); }
+        break;
+      }
+      case 'period': S.hist = { q: '', range: el.dataset.r, from: '', to: '', cats: [], type: 'out', sort: 'new' }; S.tab = 'history'; render(); break;
+      case 'cat-hist': S.hist = { q: '', range: 'month', from: '', to: '', cats: [el.dataset.c], type: 'out', sort: 'new' }; S.tab = 'history'; render(); break;
+      case 'day': { const s = Number(el.dataset.s); S.hist = { q: '', range: 'custom', from: iso(s), to: iso(s), cats: [], type: 'out', sort: 'new' }; S.tab = 'history'; render(); break; }
+      case 'f-date': dateSheet(); break;
+      case 'f-cat': catSheet(); break;
+      case 'f-type': choiceSheet('type'); break;
+      case 'f-sort': choiceSheet('sort'); break;
+      case 'f-reset': S.hist = { q: '', range: 'month', from: '', to: '', cats: [], type: 'all', sort: 'new' }; render(); break;
+      case 'range': S.hist.range = el.dataset.r; S.hist.from = ''; S.hist.to = ''; closeSheet(); render(true); break;
+      case 'cat-toggle': { const c = el.dataset.c, l = S.hist.cats; S.hist.cats = l.includes(c) ? l.filter(x => x !== c) : l.concat(c); el.classList.toggle('on'); updateHist(); break; }
+      case 'cats-clear': S.hist.cats = []; sheetEl.querySelectorAll('.catlist button').forEach(b => b.classList.remove('on')); updateHist(); break;
+      case 'choose': if (S.sheet === 'type') S.hist.type = el.dataset.v; else S.hist.sort = el.dataset.v; closeSheet(); render(true); break;
+      case 'sync': sync(); break;
+      case 'live': S.cfg.live = !S.cfg.live; saveAll(); render(true); if (S.cfg.live) liveCheck(); break;
+      case 'theme': S.cfg.theme = el.dataset.t; saveAll(); applyTheme(); render(true); break;
+    }
+  });
+  function updateHist() { const box = document.getElementById('hl'); if (box) box.innerHTML = historyList(); }
+
+  app.addEventListener('input', (ev) => {
+    const t = ev.target;
+    if (t.id === 'q') { S.hist.q = t.value; updateHist(); }
+    else if (t.id === 'note' && S.form) S.form.note = t.value;
+    else if (t.id === 'set-url') { S.cfg.url = t.value.trim(); saveAll(); updateChip(); }
+    else if (t.id === 'set-secret') { S.cfg.secret = t.value; saveAll(); updateChip(); }
+  });
+  app.addEventListener('change', (ev) => {
+    const t = ev.target;
+    if (t.id === 'from' || t.id === 'to') {
+      S.hist[t.id] = t.value; S.hist.range = (S.hist.from || S.hist.to) ? 'custom' : 'all';
+      sheetEl.querySelectorAll('.opt').forEach(o => { o.classList.remove('on'); const s = o.querySelector('svg'); if (s) s.remove(); });
+    }
+    if (t.id === 'when-in' && S.form && t.value) { const ts = new Date(t.value).getTime(); if (!isNaN(ts)) { S.form.ts = Math.min(ts, Date.now()); entrySheet(); } }
+    if (t.id === 'set-currency') { S.cfg.currency = t.value; saveAll(); }
+    if ((t.id === 'set-url' || t.id === 'set-secret') && configured()) sync();
+  });
+  app.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target.id === 'note') { ev.preventDefault(); ev.target.blur(); } });
+
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync(); });
+  window.addEventListener('online', () => sync());
+  window.addEventListener('pageshow', (e) => { if (e.persisted) sync(); });
+
+  // ---------- Demo data (open with ?demo) ----------
+  if (DEMO) {
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const now = new Date(); const list = [];
+    const at = (ago, h, m) => { const d = new Date(now); d.setDate(d.getDate() - ago); d.setHours(h, m, 0, 0); return d.getTime(); };
+    const add = (ago, h, m, amount, category, note, place, type) => { const ts = at(ago, h, m); if (ts <= Date.now()) list.push({ id: uuid(), ts, amount, category, note, place, lat: 28.63, lng: 77.21, type: type || 'out' }); };
+    for (let ago = 62; ago >= 0; ago--) {
+      const d = new Date(now); d.setDate(d.getDate() - ago); const wd = d.getDay(), work = wd > 0 && wd < 6;
+      if (rnd() < .75) add(ago, 8, 40, 30, 'Food', 'Chai', 'Karol Bagh, New Delhi');
+      if (work) add(ago, 9, 5, 120, 'Transport', 'Auto to office', 'Karol Bagh, New Delhi');
+      if (work && rnd() < .5) add(ago, 13, 15, [180, 220, 250][Math.floor(rnd() * 3)], 'Food', 'Lunch thali', 'Connaught Place, New Delhi');
+      if (ago % 4 === 1) add(ago, 19, 10, 400 + Math.floor(rnd() * 8) * 60, 'Groceries', 'Vegetables and fruits', 'INA Market, New Delhi');
+      if (wd === 6 && rnd() < .7) add(ago, 20, 30, 700, 'Fun', 'Movie tickets', 'Saket, New Delhi');
+      if (d.getDate() === 5) add(ago, 10, 30, 1500, 'Bills', 'Maid salary', 'Karol Bagh, New Delhi');
+      if (d.getDate() === 1) add(ago, 18, 0, 6000, 'Cash in', 'ATM withdrawal', 'Karol Bagh, New Delhi', 'in');
+      if (d.getDate() === 14) add(ago, 18, 0, 5000, 'Cash in', 'ATM withdrawal', 'Rajiv Chowk, New Delhi', 'in');
+    }
+    S.items = list; S.cfg.currency = 'INR'; S.srv = { budget: 18000, opening: 2600, openingTs: monthStart() - DAY }; S.lastSynced = Date.now();
+  }
+
+  render();
+  sync();
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !DEMO) navigator.serviceWorker.register('sw.js').catch(() => {});
+})();
+</script>
+</body>
+</html>

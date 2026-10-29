@@ -18,6 +18,7 @@ jobs:
       - name: Push web/ to gh-pages
         run: |
           cd web
+          rm -rf src
           touch .nojekyll
           git init -q -b gh-pages
           git config user.name "github-actions"
