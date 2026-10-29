@@ -1,8 +1,7 @@
 name: Build iPhone app
 
 on:
-  push:
-    branches: [main]
+  # Run manually from the Actions tab (Mac build minutes are limited on private repos)
   workflow_dispatch:
 
 jobs:
